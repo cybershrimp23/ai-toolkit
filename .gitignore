@@ -1,7 +1,10 @@
+instructions.md
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
 *$py.class
+.hf-cache/
+.rocm-cache/
 
 # C extensions
 *.so

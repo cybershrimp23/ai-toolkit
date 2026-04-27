@@ -101,9 +101,9 @@ Ready-to-use configs are in `config/rocm/`:
 
 | Config | What it does |
 |---|---|
-| `config/rocm/elk_sdxl_lora.yaml` | SDXL LoRA training |
-| `config/rocm/spaceship_wan22_5b_lora.yaml` | WAN 2.2 TI2V 5B LoRA training (video) |
-| `config/rocm/spaceship_wan22_5b_sample.yaml` | WAN 2.2 5B inference — loads a trained LoRA and generates sample videos, no training |
+| `config/rocm/example_sdxl_lora.yaml` | SDXL LoRA training |
+| `config/rocm/example_wan22_5b_lora.yaml` | WAN 2.2 TI2V 5B LoRA training (video) |
+| `config/rocm/example_wan22_5b_sample.yaml` | WAN 2.2 5B inference — loads a trained LoRA and generates sample videos, no training |
 
 Copy and adapt any of these for your own dataset. Key fields to change:
 
