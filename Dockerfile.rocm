@@ -1,4 +1,4 @@
-FROM rocm/pytorch:latest
+FROM rocm/pytorch:rocm7.2.2_ubuntu24.04_py3.12_pytorch_release_2.10.0
 
 LABEL description="ai-toolkit with ROCm support for AMD gfx1201 (R9700 AI Pro)"
 
@@ -17,14 +17,19 @@ RUN apt-get update && apt-get install --no-install-recommends -y \
     htop \
     rsync \
     unzip \
+    xz-utils \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Node.js 23 for the UI
-RUN curl -fsSL https://deb.nodesource.com/setup_23.x | bash - && \
-    apt-get install -y nodejs && \
-    apt-get clean && \
-    rm -rf /var/lib/apt/lists/*
+# Install Node.js 23.11.1 from the official tarball — pinned by exact version and sha256.
+# Using the tarball avoids relying on nodesource apt repo availability.
+ENV NODE_VERSION=23.11.1
+RUN curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-x64.tar.xz" \
+      -o /tmp/node.tar.xz && \
+    echo "64220ef391e74bb8feafe51a17764eff908f0cfd7f6c2c184fe8361fb8520a44  /tmp/node.tar.xz" \
+      | sha256sum -c - && \
+    tar -xJf /tmp/node.tar.xz -C /usr/local --strip-components=1 && \
+    rm /tmp/node.tar.xz
 
 # ROCm / HIP environment variables
 # gfx1201 is the R9700 AI Pro - set override in case kernel reports differently
@@ -44,12 +49,13 @@ ENV HF_HUB_ENABLE_HF_TRANSFER=1
 
 WORKDIR /app/ai-toolkit
 
-# Copy requirements first for better layer caching
-COPY requirements.txt requirements_base.txt ./
+# Copy pinned requirements first for better layer caching
+COPY requirements.rocm.txt ./
 
-# Install Python dependencies
-# bitsandbytes 0.49+ has native ROCm support
-RUN pip install --no-cache-dir -r requirements.txt
+# Install Python dependencies from fully-pinned requirements.
+# torch/torchvision/torchaudio/apex/triton are intentionally excluded —
+# they are already installed in the base image as ROCm-specific builds.
+RUN pip install --no-cache-dir -r requirements.rocm.txt
 
 # Copy the rest of the source
 COPY . .
