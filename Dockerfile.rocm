@@ -1,0 +1,72 @@
+FROM rocm/pytorch:latest
+
+LABEL description="ai-toolkit with ROCm support for AMD gfx1201 (R9700 AI Pro)"
+
+# Avoid interactive prompts
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install system deps
+RUN apt-get update && apt-get install --no-install-recommends -y \
+    git \
+    curl \
+    build-essential \
+    cmake \
+    wget \
+    ffmpeg \
+    tmux \
+    htop \
+    rsync \
+    unzip \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Node.js 23 for the UI
+RUN curl -fsSL https://deb.nodesource.com/setup_23.x | bash - && \
+    apt-get install -y nodejs && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
+# ROCm / HIP environment variables
+# gfx1201 is the R9700 AI Pro - set override in case kernel reports differently
+ENV HSA_OVERRIDE_GFX_VERSION=12.0.1
+ENV PYTORCH_ROCM_ARCH=gfx1201
+ENV HIP_VISIBLE_DEVICES=0,1
+ENV ROCR_VISIBLE_DEVICES=0,1
+
+# Performance / stability env vars (can be overridden at runtime)
+ENV AMD_SERIALIZE_KERNEL=3
+ENV TORCH_USE_HIP_DSA=1
+ENV HSA_ENABLE_SDMA=0
+ENV PYTORCH_ROCM_ALLOC_CONF=max_split_size_mb:768,garbage_collect=1
+ENV ROCBLAS_USE_HIPBLASLT=0
+ENV ROCBLAS_LOG_LEVEL=0
+ENV HF_HUB_ENABLE_HF_TRANSFER=1
+
+WORKDIR /app/ai-toolkit
+
+# Copy requirements first for better layer caching
+COPY requirements.txt requirements_base.txt ./
+
+# Install Python dependencies
+# bitsandbytes 0.49+ has native ROCm support
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy the rest of the source
+COPY . .
+
+# Build the UI
+WORKDIR /app/ai-toolkit/ui
+RUN npm install && \
+    npm run update_db && \
+    npm run build
+
+WORKDIR /app/ai-toolkit
+
+# Models and dataset are mounted from host at runtime
+# /app/ai-toolkit/models  -> host models/
+# /app/ai-toolkit/dataset -> host dataset/
+# /app/ai-toolkit/output  -> host output/ (for lora checkpoints)
+
+EXPOSE 8675
+
+CMD ["python", "run.py"]

@@ -276,7 +276,12 @@ class AggressiveWanUnloadPipeline(WanPipeline):
 
         self._current_timestep = None
 
-        # unload transformer
+        # unload transformer before loading vae to avoid OOM (both ~23GB transformer
+        # + ~6.64GB VAE decode don't fit simultaneously on a 32GB GPU)
+        print("Unloading transformer")
+        self.transformer.to("cpu")
+        torch.cuda.empty_cache()
+
         # load vae
         print("Loading Vae")
         self.vae.to(vae_device)

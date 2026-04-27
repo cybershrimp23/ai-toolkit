@@ -1,0 +1,56 @@
+services:
+  ai-toolkit:
+    build:
+      context: .
+      dockerfile: Dockerfile.rocm
+    image: ai-toolkit-rocm:latest
+    container_name: ai-toolkit-rocm
+
+    # ROCm GPU access
+    devices:
+      - /dev/kfd:/dev/kfd
+      - /dev/dri:/dev/dri
+    group_add:
+      - "987"   # render
+      - "983"   # video
+    shm_size: '8gb'
+
+    # Mount models, dataset, and output from host
+    volumes:
+      - ./models:/app/ai-toolkit/models
+      - ./dataset:/app/ai-toolkit/dataset
+      - ./output:/app/ai-toolkit/output
+      - ./config:/app/ai-toolkit/config
+      - ./toolkit:/app/ai-toolkit/toolkit
+      - ./extensions_built_in:/app/ai-toolkit/extensions_built_in
+      - ./jobs:/app/ai-toolkit/jobs
+      - ./.rocm-cache/miopen:/root/.cache/miopen
+      - ./.rocm-cache/comgr:/root/.cache/comgr
+      - ./.rocm-cache/triton:/root/.cache/triton
+      - ./.hf-cache:/root/.cache/huggingface
+
+    # Default: launch the UI. Override at runtime for training:
+    #   docker compose -f docker-compose.rocm.yml run --rm ai-toolkit python run.py config/my_lora.yaml
+    command: ["bash", "-c", "cd /app/ai-toolkit/ui && npm run start"]
+
+    ports:
+      - "8675:8675"
+
+    environment:
+      # Override these if needed
+      - HSA_OVERRIDE_GFX_VERSION=12.0.1
+      - PYTORCH_ROCM_ARCH=gfx1201
+      - HIP_VISIBLE_DEVICES=0,1
+      - ROCR_VISIBLE_DEVICES=0,1
+      - AMD_SERIALIZE_KERNEL=3
+      - TORCH_USE_HIP_DSA=1
+      - HSA_ENABLE_SDMA=0
+      - PYTORCH_ROCM_ALLOC_CONF=max_split_size_mb:768,garbage_collect=1
+      - PYTORCH_ALLOC_CONF=expandable_segments:True
+      - ROCBLAS_USE_HIPBLASLT=0
+      - ROCBLAS_LOG_LEVEL=0
+      - HF_HUB_ENABLE_HF_TRANSFER=1
+      - HF_HOME=/root/.cache/huggingface
+      - HIP_LAUNCH_BLOCKING=1   # force synchronous kernel dispatch — helps diagnose/fix inference hangs
+      - MIOPEN_USER_DB_PATH=/root/.cache/miopen   # persist compiled kernel DB across container runs
+      - MIOPEN_FIND_MODE=3                         # fast mode: skip exhaustive search, use first working algo

@@ -1,8 +1,157 @@
-# Ostris AI Toolkit
+# Ostris AI Toolkit — AMD Radeon AI PRO R9700 (ROCm) Branch
+
+> **This is a community fork of [ostris/ai-toolkit](https://github.com/ostris/ai-toolkit) with added support for the AMD Radeon AI PRO R9700 (`gfx1201`) via ROCm.**
+>
+> All training runs inside a Docker container for dependency isolation. The web UI is the default entrypoint — training is launched via `docker compose run`.
+>
+> Upstream changes are merged from ostris/ai-toolkit master plus [ChuloAI/ai-toolkit PR #563](https://github.com/ostris/ai-toolkit/pull/563) (initial ROCm support).
+
+---
+
+## Docker Setup (R9700 / ROCm)
+
+### Requirements
+
+- AMD Radeon AI PRO R9700 (or other `gfx1201` GPU)
+- ROCm 7.2+ installed on the host ([ROCm install guide](https://rocm.docs.amd.com/en/latest/deploy/linux/index.html))
+- Docker with the ROCm runtime
+- At least 32 GB system RAM recommended (models are swapped between GPU and CPU VRAM)
+- `render` and `video` group membership for the user running Docker (needed for `/dev/kfd` and `/dev/dri` access)
+
+Check your render and video group IDs — they are hardcoded in `docker-compose.rocm.yml`:
+
+```bash
+getent group render
+getent group video
+```
+
+If the IDs on your system differ from `987` (render) and `983` (video), update the `group_add` entries in `docker-compose.rocm.yml`.
+
+---
+
+### 1. Clone and build
+
+```bash
+git clone -b r9700_rocm https://github.com/cybershrimp23/ai-toolkit.git
+cd ai-toolkit
+docker compose -f docker-compose.rocm.yml build
+```
+
+The first build pulls `rocm/pytorch:latest` and installs Python dependencies — expect 10–20 minutes.
+
+---
+
+### 2. Directory layout
+
+Create the directories Docker will mount from the host before first run:
+
+```bash
+mkdir -p models dataset output .hf-cache .rocm-cache/miopen .rocm-cache/comgr .rocm-cache/triton
+```
+
+| Host path | Container path | Purpose |
+|---|---|---|
+| `./models/` | `/app/ai-toolkit/models/` | Base model checkpoints (`.safetensors`) |
+| `./dataset/` | `/app/ai-toolkit/dataset/` | Training images/videos and caption `.txt` files |
+| `./output/` | `/app/ai-toolkit/output/` | Saved LoRA checkpoints and samples |
+| `./config/` | `/app/ai-toolkit/config/` | YAML training/inference configs |
+| `./.hf-cache/` | `/root/.cache/huggingface/` | Hugging Face model cache (persisted across runs) |
+| `./.rocm-cache/` | `/root/.cache/{miopen,comgr,triton}/` | ROCm compiled kernel cache (critical for speed) |
+
+---
+
+### 3. Start the web UI
+
+```bash
+docker compose -f docker-compose.rocm.yml up
+```
+
+Open `http://localhost:8675` in your browser. The UI lets you create, start, stop, and monitor training jobs. It does not need to stay open for jobs to keep running.
+
+To stop the UI:
+
+```bash
+docker compose -f docker-compose.rocm.yml down
+```
+
+---
+
+### 4. Run training from the command line
+
+The web UI can launch jobs directly, but you can also run configs manually:
+
+```bash
+docker compose -f docker-compose.rocm.yml run --rm ai-toolkit \
+  python run.py config/rocm/your_config.yaml
+```
+
+**Always run `docker compose ... down` between training runs** to fully release GPU VRAM. Zombie containers hold memory even after a job exits.
+
+Check VRAM usage at any time:
+
+```bash
+rocm-smi --showmeminfo vram
+```
+
+---
+
+### 5. Example configs
+
+Ready-to-use configs are in `config/rocm/`:
+
+| Config | What it does |
+|---|---|
+| `config/rocm/elk_sdxl_lora.yaml` | SDXL LoRA training |
+| `config/rocm/spaceship_wan22_5b_lora.yaml` | WAN 2.2 TI2V 5B LoRA training (video) |
+| `config/rocm/spaceship_wan22_5b_sample.yaml` | WAN 2.2 5B inference — loads a trained LoRA and generates sample videos, no training |
+
+Copy and adapt any of these for your own dataset. Key fields to change:
+
+- `datasets[0].folder_path` — path to your dataset **inside the container** (e.g. `/app/ai-toolkit/dataset/my_subject`)
+- `model.name_or_path` — HuggingFace model ID or absolute path to a local `.safetensors`
+- `config.name` — name for the output folder under `output/`
+- `train.steps` — number of training steps
+
+---
+
+### 6. WAN 2.2 video training notes
+
+- **Frame count rule:** `(frames - 1) % 4 == 0` — valid values: 1, 5, 9, 13, 17 … 81. The model's native default is 81 frames.
+- **Resolution:** the bucket system picks the closest valid resolution. Use `get_bucket_for_image_size()` in `toolkit/buckets.py` to predict the bucket for your video dimensions. Both width and height of the final bucket must be divisible by 32.
+- **Validated working combination:** video at `384×688`, 81 frames, `resolution: 513` in config → buckets to `384×672` (both divisible by 32).
+- **Disable inline sampling during training** (`disable_sampling: true`, `skip_first_sample: true` in the `train:` block) — generating video samples while the optimizer is resident causes OOM on a 32 GB GPU. Use the separate `spaceship_wan22_5b_sample.yaml` inference config after training instead.
+- **First run is slow** (~18 min for 30 steps). The ROCm kernel cache in `.rocm-cache/` is populated on first run. Subsequent runs are significantly faster (~8.5 min for 30 steps) as compiled kernels are reused.
+
+---
+
+### 7. Downloading models
+
+Models are downloaded from Hugging Face automatically on first use if `name_or_path` is a HF repo ID. They are cached in `.hf-cache/` on the host. To pre-download manually:
+
+```bash
+docker compose -f docker-compose.rocm.yml run --rm ai-toolkit \
+  python -c "from huggingface_hub import snapshot_download; snapshot_download('Wan-AI/Wan2.2-TI2V-5B-Diffusers')"
+```
+
+---
+
+### 8. Environment variables
+
+Key ROCm variables set in `docker-compose.rocm.yml`:
+
+| Variable | Value | Purpose |
+|---|---|---|
+| `HSA_OVERRIDE_GFX_VERSION` | `12.0.1` | Required — R9700 is `gfx1201`, not yet in official ROCm whitelist |
+| `HIP_VISIBLE_DEVICES` | `0,1` | Expose both dGPUs to the container |
+| `PYTORCH_ALLOC_CONF` | `expandable_segments:True` | Reduces memory fragmentation OOM errors |
+| `MIOPEN_FIND_MODE` | `3` | Fast kernel selection — skips exhaustive search on first run |
+| `HIP_LAUNCH_BLOCKING` | `1` | Synchronous kernel dispatch — helps diagnose inference hangs |
+
+---
 
 AI Toolkit is an easy to use all in one training suite for diffusion models. I try to support all the latest models on consumer grade hardware. Image and video models. It can be run as a GUI or CLI. It is designed to be easy to use but still have every feature imaginable. Free and open source.
 
-
+---
 
 ## Supported Models
 
